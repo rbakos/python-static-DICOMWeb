@@ -277,13 +277,45 @@ class DicomHandler:
             self._generate_thumbnail(dataset.pixel_array, study_uid)
         
         # Check for bulk data elements (other than PixelData)
+        # First, check for standard bulk data elements that end with 'Data'
         bulk_data_elements = [attr for attr in dir(dataset) if attr.endswith('Data') and attr != 'PixelData' and hasattr(dataset, attr)]
         
+        # Also check for elements with VR types that typically contain bulk data
+        bulk_data_vrs = ['OB', 'OW', 'OF', 'OD', 'UN']
+        
+        # Process standard bulk data elements
         for attr in bulk_data_elements:
             data = getattr(dataset, attr)
             if isinstance(data, bytes) and len(data) > 0:
                 bulk_data_path = bulk_data_dir / f"{instance_uid}_{attr}.bin"
                 bulk_data_path.write_bytes(data)
+        
+        # Process elements with bulk data VR types
+        for elem in dataset:
+            if elem.VR in bulk_data_vrs and elem.tag != 0x7FE00010:  # Skip PixelData
+                try:
+                    # Get the element name or use the tag if name not available
+                    elem_name = elem.name if hasattr(elem, 'name') else f"Tag_{elem.tag:08X}"
+                    # Clean up the name to be file-system friendly
+                    elem_name = ''.join(c if c.isalnum() else '_' for c in elem_name)
+                    
+                    # Get the data
+                    data = elem.value
+                    if isinstance(data, bytes) and len(data) > 0:
+                        bulk_data_path = bulk_data_dir / f"{instance_uid}_{elem_name}.bin"
+                        bulk_data_path.write_bytes(data)
+                except Exception as e:
+                    print(f"Error extracting bulk data from {elem}: {e}")
+        
+        # Check for encapsulated documents
+        if hasattr(dataset, 'EncapsulatedDocument'):
+            try:
+                doc_data = dataset.EncapsulatedDocument
+                if isinstance(doc_data, bytes) and len(doc_data) > 0:
+                    bulk_data_path = bulk_data_dir / f"{instance_uid}_EncapsulatedDocument.bin"
+                    bulk_data_path.write_bytes(doc_data)
+            except Exception as e:
+                print(f"Error extracting encapsulated document: {e}")
         
         # Create notification for eventual consistency
         notification_path = self.notifications_dir / f"{study_uid}_{series_uid}_{instance_uid}.json"
@@ -564,3 +596,58 @@ class DicomHandler:
         # Get the image data as bytes
         img_buffer.seek(0)
         return img_buffer.read()
+        
+    def get_bulk_data(self, study_uid: str) -> List[Dict[str, str]]:
+        """Get list of bulk data items for a study.
+        
+        Args:
+            study_uid: Study instance UID
+            
+        Returns:
+            List of bulk data items with their UIDs and types
+            
+        Raises:
+            FileNotFoundError: If bulk data directory not found
+        """
+        bulk_data_dir = self._get_study_path(study_uid) / "bulkdata"
+        if not bulk_data_dir.exists():
+            raise FileNotFoundError(f"Bulk data directory not found for study {study_uid}")
+            
+        bulk_data_items = []
+        for item in bulk_data_dir.iterdir():
+            if item.is_file() and item.suffix == ".bin":
+                # Parse the filename to get instance UID and data type
+                # Format is {instance_uid}_{data_type}.bin
+                parts = item.stem.split('_', 1)
+                if len(parts) == 2:
+                    instance_uid, data_type = parts
+                    bulk_data_items.append({
+                        "uid": instance_uid,
+                        "type": data_type,
+                        "size": item.stat().st_size,
+                        "path": str(item.relative_to(self.root_dir))
+                    })
+                    
+        return bulk_data_items
+        
+    def get_bulk_data_item(self, study_uid: str, instance_uid: str, data_type: str) -> bytes:
+        """Get specific bulk data item.
+        
+        Args:
+            study_uid: Study instance UID
+            instance_uid: Instance UID
+            data_type: Type of bulk data
+            
+        Returns:
+            Bulk data as bytes
+            
+        Raises:
+            FileNotFoundError: If bulk data item not found
+        """
+        bulk_data_dir = self._get_study_path(study_uid) / "bulkdata"
+        bulk_data_path = bulk_data_dir / f"{instance_uid}_{data_type}.bin"
+        
+        if not bulk_data_path.exists():
+            raise FileNotFoundError(f"Bulk data item not found: {instance_uid}_{data_type}")
+            
+        return bulk_data_path.read_bytes()

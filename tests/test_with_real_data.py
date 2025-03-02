@@ -133,44 +133,46 @@ def test_bulk_data_with_real_files(test_env):
     """Test bulk data handling with real DICOM files."""
     client = test_env["client"]
     
-    # Find DICOM files that might contain bulk data
-    dicom_files = glob.glob(str(TEST_DATA_DIR / "**" / "*.dcm"), recursive=True)
+    # Use our specific test file with bulk data
+    bulk_test_file = TEST_DATA_DIR / "bulk_test" / "test_with_bulk.dcm"
     
-    # Limit to 20 files for faster testing
-    dicom_files = dicom_files[:20]
+    # Ensure the test file exists
+    if not bulk_test_file.exists():
+        # If it doesn't exist, try to create it
+        try:
+            import sys
+            import subprocess
+            script_path = Path(__file__).parent.parent / "create_test_dicom_with_bulk.py"
+            subprocess.run([sys.executable, str(script_path)], check=True)
+            assert bulk_test_file.exists(), "Failed to create test DICOM file with bulk data"
+        except Exception as e:
+            pytest.skip(f"Could not create test DICOM file with bulk data: {e}")
     
-    assert len(dicom_files) > 0, "No DICOM files found in test data"
+    # Read the test file
+    with open(bulk_test_file, "rb") as f:
+        dicom_data = f.read()
     
-    # Store each DICOM file and check for bulk data
-    for dicom_file in dicom_files:
-        with open(dicom_file, "rb") as f:
-            dicom_data = f.read()
-        
-        response = client.post("/instances", files={"file": (os.path.basename(dicom_file), dicom_data)})
-        if response.status_code != 200:
-            print(f"Error storing file {dicom_file}: {response.status_code} - {response.text}")
-            # Try to parse the DICOM file to see if it's valid
-            try:
-                import pydicom
-                ds = pydicom.dcmread(dicom_file)
-                print(f"DICOM file info: {ds.SOPClassUID} - {ds.Modality if hasattr(ds, 'Modality') else 'No modality'}")
-            except Exception as e:
-                print(f"Error parsing DICOM file: {e}")
-        assert response.status_code == 200
-        uids = response.json()
-        
-        # Check if bulk data directory exists and has content
-        bulk_dir = os.path.join(TEST_DIR, "studies", uids["study_uid"], "bulkdata")
-        if os.path.exists(bulk_dir) and len(os.listdir(bulk_dir)) > 0:
-            # If we found bulk data, test the bulk data endpoint
-            response = client.get(f"/studies/{uids['study_uid']}/bulkdata")
-            assert response.status_code == 200
-            bulk_data_list = response.json()
-            assert isinstance(bulk_data_list, list)
-            
-            # Test successful case
-            print(f"Found bulk data in file: {dicom_file}")
-            return
+    # Store the DICOM file
+    response = client.post("/instances", files={"file": ("test_with_bulk.dcm", dicom_data)})
+    assert response.status_code == 200, f"Failed to store test DICOM file: {response.text}"
+    uids = response.json()
     
-    # If no bulk data was found, skip the test
-    pytest.skip("No bulk data found in test files")
+    # Check if bulk data directory exists and has content
+    bulk_dir = os.path.join(TEST_DIR, "studies", uids["study_uid"], "bulkdata")
+    assert os.path.exists(bulk_dir), "Bulk data directory was not created"
+    assert len(os.listdir(bulk_dir)) > 0, "No bulk data files were created"
+    
+    # Test the bulk data endpoint
+    response = client.get(f"/studies/{uids['study_uid']}/bulkdata")
+    assert response.status_code == 200, f"Bulk data endpoint failed: {response.text}"
+    bulk_data_list = response.json()
+    assert isinstance(bulk_data_list, list), "Bulk data response is not a list"
+    assert len(bulk_data_list) > 0, "Bulk data list is empty"
+    
+    # Test retrieving a specific bulk data item
+    bulk_item = bulk_data_list[0]
+    response = client.get(f"/studies/{uids['study_uid']}/bulkdata/{bulk_item['uid']}/{bulk_item['type']}")
+    assert response.status_code == 200, f"Failed to retrieve bulk data item: {response.text}"
+    assert len(response.content) > 0, "Bulk data item is empty"
+    
+    print(f"Successfully tested bulk data with file: {bulk_test_file}")

@@ -131,6 +131,20 @@ class DicomWebServer:
             return self.handler.get_thumbnail(study_uid, series_uid, instance_uid)
         except FileNotFoundError:
             raise HTTPException(status_code=404, detail="Thumbnail not found")
+            
+    async def get_bulk_data(self, study_uid: str) -> List[Dict[str, Any]]:
+        """Get list of bulk data items for a study."""
+        try:
+            return self.handler.get_bulk_data(study_uid)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Bulk data not found")
+            
+    async def get_bulk_data_item(self, study_uid: str, instance_uid: str, data_type: str) -> bytes:
+        """Get specific bulk data item."""
+        try:
+            return self.handler.get_bulk_data_item(study_uid, instance_uid, data_type)
+        except FileNotFoundError:
+            raise HTTPException(status_code=404, detail="Bulk data item not found")
 
 
 # Initialize server with default config for testing
@@ -243,3 +257,15 @@ async def get_instance_thumbnail(study_uid: str, series_uid: str, instance_uid: 
     """Get thumbnail for an instance."""
     thumbnail = await server.get_thumbnail(study_uid, series_uid, instance_uid)
     return Response(content=thumbnail, media_type="image/jpeg")
+
+@app.get("/studies/{study_uid}/bulkdata")
+async def get_bulk_data(study_uid: str):
+    """Get list of bulk data items for a study."""
+    bulk_data = await server.get_bulk_data(study_uid)
+    return bulk_data
+
+@app.get("/studies/{study_uid}/bulkdata/{instance_uid}/{data_type}")
+async def get_bulk_data_item(study_uid: str, instance_uid: str, data_type: str):
+    """Get specific bulk data item."""
+    bulk_data = await server.get_bulk_data_item(study_uid, instance_uid, data_type)
+    return Response(content=bulk_data, media_type="application/octet-stream")
